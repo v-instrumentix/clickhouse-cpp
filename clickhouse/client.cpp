@@ -551,6 +551,8 @@ bool Client::Impl::ReadBlock(InputStream& input, Block* block) {
         if (!WireFormat::ReadString(input, &type)) {
             return false;
         }
+        if (type == "Object('json')")
+            type = "JSON";
 
         if (ColumnRef col = CreateColumnByType(type, create_column_settings)) {
             if (num_rows && !col->Load(&input, num_rows)) {

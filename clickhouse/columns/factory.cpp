@@ -7,6 +7,7 @@
 #include "geo.h"
 #include "ip4.h"
 #include "ip6.h"
+#include "ix-json.h"
 #include "lowcardinality.h"
 #include "lowcardinalityadaptor.h"
 #include "map.h"
@@ -126,6 +127,9 @@ static ColumnRef CreateTerminalColumn(const TypeAst& ast) {
 
     case Type::MultiPolygon:
         return std::make_shared<ColumnMultiPolygon>();
+
+    case Type::IxJson:
+        return std::make_shared<ColumnIxJson>();
 
     default:
         return nullptr;

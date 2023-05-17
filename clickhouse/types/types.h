@@ -54,7 +54,8 @@ public:
         Point,
         Ring,
         Polygon,
-        MultiPolygon
+        MultiPolygon,
+        IxJson
     };
 
     using EnumItem = std::pair<std::string /* name */, int16_t /* value */>;
@@ -139,6 +140,8 @@ public:
     static TypeRef CreatePolygon();
 
     static TypeRef CreateMultiPolygon();
+
+    static TypeRef CreateIxJson();
 
 private:
     uint64_t GetTypeUniqueId() const;

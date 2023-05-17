@@ -25,6 +25,7 @@ SET ( clickhouse-cpp-lib-src
     columns/uuid.cpp
 
     columns/itemview.cpp
+    columns/ix-json.cpp
 
     types/type_parser.cpp
     types/types.cpp
@@ -124,6 +125,7 @@ INSTALL(FILES columns/string.h DESTINATION include/clickhouse/columns/)
 INSTALL(FILES columns/tuple.h DESTINATION include/clickhouse/columns/)
 INSTALL(FILES columns/utils.h DESTINATION include/clickhouse/columns/)
 INSTALL(FILES columns/uuid.h DESTINATION include/clickhouse/columns/)
+INSTALL(FILES columns/ix-json.h DESTINATION include/clickhouse/columns/)
 
 # types
 INSTALL(FILES types/type_parser.h DESTINATION include/clickhouse/types/)

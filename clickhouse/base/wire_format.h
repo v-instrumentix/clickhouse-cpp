@@ -72,8 +72,8 @@ inline void WireFormat::WriteString(OutputStream& output, std::string_view value
 }
 
 inline void WireFormat::WriteObject(OutputStream& output, std::string_view value) {
-    uint8_t binary_serialization_type = 1;
-    WriteBytes(output, &binary_serialization_type, 1);
+    uint8_t binary_serialization_type = 0;
+    WriteBytes(output, &binary_serialization_type, sizeof(binary_serialization_type));
     WriteVarint64(output, value.size());
     WriteAll(output, value.data(), value.size());
 }

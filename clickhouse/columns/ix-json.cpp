@@ -184,7 +184,7 @@ bool ColumnIxJson::LoadBody(InputStream* input, size_t rows) {
 
 void ColumnIxJson::SaveBody(OutputStream* output) {
     for (const auto & item : items_) {
-        WireFormat::WriteString(*output, item);
+        WireFormat::WriteObject(*output, item);
     }
 }
 

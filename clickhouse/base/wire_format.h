@@ -24,6 +24,7 @@ public:
     static void WriteString(OutputStream& output, std::string_view value);
     static void WriteUInt64(OutputStream& output, const uint64_t value);
     static void WriteVarint64(OutputStream& output, uint64_t value);
+    static void WriteObject(OutputStream& output, std::string_view value);
 
 private:
     static bool ReadAll(InputStream& input, void* buf, size_t len);
@@ -66,6 +67,13 @@ inline void WireFormat::WriteBytes(OutputStream& output, const void* buf, size_t
 }
 
 inline void WireFormat::WriteString(OutputStream& output, std::string_view value) {
+    WriteVarint64(output, value.size());
+    WriteAll(output, value.data(), value.size());
+}
+
+inline void WireFormat::WriteObject(OutputStream& output, std::string_view value) {
+    uint8_t binary_serialization_type = 0;
+    WriteBytes(output, &binary_serialization_type, 1);
     WriteVarint64(output, value.size());
     WriteAll(output, value.data(), value.size());
 }

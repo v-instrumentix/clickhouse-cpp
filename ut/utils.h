@@ -7,6 +7,7 @@
 #include "utils_meta.h"
 #include "utils_comparison.h"
 
+#include <iterator>
 #include <optional>
 #include <ostream>
 #include <ratio>
@@ -51,7 +52,8 @@ auto getEnvOrDefault(const std::string& env, const char * default_val) {
                 return std::stoll(value);
         } else if constexpr (std::is_unsigned_v<ResultType>) {
             if constexpr (sizeof(ResultType) <= sizeof(unsigned long))
-                return std::stoul(value);
+                // For cases when ResultType is unsigned int.
+                return static_cast<ResultType>(std::stoul(value));
             else if constexpr (sizeof(ResultType) <= sizeof(unsigned long long))
                 return std::stoull(value);
         }
@@ -166,7 +168,10 @@ std::ostream& operator<<(std::ostream & ostr, const PrintContainer<T>& print_con
     for (auto i = std::begin(container); i != std::end(container); /*intentionally no ++i*/) {
         const auto & elem = *i;
 
-        if constexpr (is_container_v<std::decay_t<decltype(elem)>>) {
+        if constexpr (is_string_v<decltype(elem)>) {
+            ostr << '"' << elem << '"';
+        }
+        else if constexpr (is_container_v<std::decay_t<decltype(elem)>>) {
             ostr << PrintContainer{elem};
         } else {
             ostr << elem;
@@ -177,7 +182,7 @@ std::ostream& operator<<(std::ostream & ostr, const PrintContainer<T>& print_con
         }
     }
 
-    return ostr << "]";
+    return ostr << "] (" << std::size(container) << " items)";
 }
 
 inline uint64_t versionNumber(

@@ -19,6 +19,7 @@
 #include "columns/uuid.h"
 
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <ostream>
 #include <string>
@@ -39,9 +40,22 @@ struct ServerInfo {
 };
 
 /// Methods of block compression.
-enum class CompressionMethod {
-    None    = -1,
-    LZ4     =  1,
+enum class CompressionMethod : int8_t {
+    None = -1,
+    LZ4  = 1,
+    ZSTD = 2,
+};
+
+struct Endpoint {
+    std::string host;
+    uint16_t port = 9000;
+    inline bool operator==(const Endpoint& right) const {
+        return host == right.host && port == right.port;
+    }
+};
+
+enum class EndpointsIterationAlgorithm {
+    RoundRobin = 0,
 };
 
 struct ClientOptions {
@@ -56,7 +70,15 @@ struct ClientOptions {
     /// Hostname of the server.
     DECLARE_FIELD(host, std::string, SetHost, std::string());
     /// Service port.
-    DECLARE_FIELD(port, unsigned int, SetPort, 9000);
+    DECLARE_FIELD(port, uint16_t, SetPort, 9000);
+
+    /** Set endpoints (host+port), only one is used.
+     * Client tries to connect to those endpoints one by one, on the round-robin basis:
+     * first default enpoint (set via SetHost() + SetPort()), then each of endpoints, from begin() to end(),
+     * the first one to establish connection is used for the rest of the session.
+     * If port isn't specified, default(9000) value will be used.
+     */
+    DECLARE_FIELD(endpoints, std::vector<Endpoint>, SetEndpoints, {});
 
     /// Default database.
     DECLARE_FIELD(default_database, std::string, SetDefaultDatabase, "default");
@@ -103,7 +125,7 @@ struct ClientOptions {
     * @see LowCardinalitySerializationAdaptor, CreateColumnByType
     */
     [[deprecated("Makes implementation of LC(X) harder and code uglier. Will be removed in next major release (3.0) ")]]
-    DECLARE_FIELD(backward_compatibility_lowcardinality_as_wrapped_column, bool, SetBakcwardCompatibilityFeatureLowCardinalityAsWrappedColumn, true);
+    DECLARE_FIELD(backward_compatibility_lowcardinality_as_wrapped_column, bool, SetBakcwardCompatibilityFeatureLowCardinalityAsWrappedColumn, false);
 
     /** Set max size data to compress if compression enabled.
      *
@@ -199,6 +221,7 @@ struct ClientOptions {
 };
 
 std::ostream& operator<<(std::ostream& os, const ClientOptions& options);
+std::ostream& operator<<(std::ostream& os, const Endpoint& options);
 
 class SocketFactory;
 
@@ -239,6 +262,24 @@ public:
     void ResetConnection();
 
     const ServerInfo& GetServerInfo() const;
+
+    /// Get current connected endpoint.
+    /// In case when client is not connected to any endpoint, nullopt will returned.
+    const std::optional<Endpoint>& GetCurrentEndpoint() const;
+
+    // Try to connect to different endpoints one by one only one time. If it doesn't work, throw an exception.
+    void ResetConnectionEndpoint();
+
+    struct Version
+    {
+        uint16_t major;
+        uint16_t minor;
+        uint16_t patch;
+        uint16_t build;
+        const char * extra;
+    };
+
+    static Version GetVersion();
 
 private:
     const ClientOptions options_;

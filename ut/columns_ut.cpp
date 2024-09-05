@@ -104,10 +104,21 @@ TEST(ColumnsCase, FixedString_Append_LargeString) {
     EXPECT_ANY_THROW(col->Append("this is a long string"));
 }
 
-TEST(ColumnsCase, StringInit) {
-    auto col = std::make_shared<ColumnString>(MakeStrings());
+TEST(ColumnsCase, FixedString_Type_Size_Eq0) {
+    const auto col = std::make_shared<ColumnFixedString>(0);
+    ASSERT_EQ(col->FixedSize(), col->Type()->As<FixedStringType>()->GetSize());
+}
 
-    ASSERT_EQ(col->Size(), 4u);
+TEST(ColumnsCase, FixedString_Type_Size_Eq10) {
+    const auto col = std::make_shared<ColumnFixedString>(10);
+    ASSERT_EQ(col->FixedSize(), col->Type()->As<FixedStringType>()->GetSize());
+}
+
+TEST(ColumnsCase, StringInit) {
+    auto values = MakeStrings();
+    auto col = std::make_shared<ColumnString>(values);
+
+    ASSERT_EQ(col->Size(), values.size());
     ASSERT_EQ(col->At(1), "ab");
     ASSERT_EQ(col->At(3), "abcd");
 }
@@ -172,6 +183,64 @@ TEST(ColumnsCase, DateAppend) {
     ASSERT_EQ(col2->At(0), (now / 86400) * 86400);
 }
 
+
+TEST(ColumnsCase, Date_UInt16_interface) {
+    auto col1 = std::make_shared<ColumnDate>();
+
+    col1->AppendRaw(1u);
+    col1->AppendRaw(1234u);
+
+    ASSERT_EQ(col1->Size(), 2u);
+    ASSERT_EQ(col1->RawAt(0), 1u);
+    ASSERT_EQ(col1->RawAt(1), 1234u);
+}
+
+TEST(ColumnsCase, Date_UInt16_construct_from_rvalue_data) {
+    auto const expected = MakeNumbers<uint16_t>();
+
+    auto data = expected;
+    auto col1 = std::make_shared<ColumnDate>(std::move(data));
+
+    ASSERT_EQ(col1->Size(), expected.size());
+    for (size_t i = 0; i < expected.size(); ++i) {
+        ASSERT_EQ(col1->RawAt(i), expected[i]);
+    }
+}
+
+TEST(ColumnsCase, Date32_Int32_interface) {
+    auto col1 = std::make_shared<ColumnDate32>();
+
+    col1->AppendRaw(1);
+    col1->AppendRaw(1234);
+    col1->AppendRaw(-1234);
+
+    ASSERT_EQ(col1->Size(), 3u);
+    ASSERT_EQ(col1->RawAt(0), 1);
+    ASSERT_EQ(col1->RawAt(1), 1234);
+    ASSERT_EQ(col1->RawAt(2), -1234);
+}
+
+TEST(ColumnsCase, Date32_construct_from_rvalue_data) {
+    auto const expected = MakeNumbers<int32_t>();
+
+    auto data = expected;
+    auto col1 = std::make_shared<ColumnDate32>(std::move(data));
+
+    ASSERT_EQ(col1->Size(), expected.size());
+    for (size_t i = 0; i < expected.size(); ++i) {
+        ASSERT_EQ(col1->RawAt(i), expected[i]);
+    }
+}
+
+TEST(ColumnsCase, DateTime_construct_from_rvalue_data) {
+    auto const expected = MakeNumbers<uint32_t>();
+
+    auto data = expected;
+    auto col1 = std::make_shared<ColumnDateTime>(std::move(data));
+
+    EXPECT_TRUE(CompareRecursive(*col1, expected));
+}
+
 TEST(ColumnsCase, DateTime64_0) {
     auto column = std::make_shared<ColumnDateTime64>(0ul);
 
@@ -180,6 +249,7 @@ TEST(ColumnsCase, DateTime64_0) {
     ASSERT_EQ(0u, column->GetPrecision());
     ASSERT_EQ(0u, column->Size());
 }
+
 
 TEST(ColumnsCase, DateTime64_6) {
     auto column = std::make_shared<ColumnDateTime64>(6ul);
@@ -499,6 +569,23 @@ TEST(ColumnsCase, ColumnIPv4_construct_from_data)
     EXPECT_ANY_THROW(ColumnIPv4(ColumnRef(std::make_shared<ColumnString>())));
 }
 
+TEST(ColumnsCase, ColumnIPv4_construct_from_rvalue_data) {
+    std::vector<uint32_t> data = {
+        0x12345678,
+        0x0,
+        0x0100007f,
+    };
+
+    const auto expected = {
+        MakeIPv4(data[0]),
+        MakeIPv4(data[1]),
+        MakeIPv4(data[2]),
+    };
+
+    auto col = ColumnIPv4(std::move(data));
+    EXPECT_TRUE(CompareRecursive(col, expected));
+}
+
 TEST(ColumnsCase, ColumnIPv6)
 {
     // TODO: split into proper method-level unit-tests
@@ -789,6 +876,12 @@ TEST(ColumnsCase, ColumnLowCardinalityString_WithEmptyString_3) {
     }
 }
 
+TEST(ColumnsCase, ColumnLowCardinalityFixedString_Type_Size_Eq) {
+    const size_t fixed_size = 10;
+    const auto col          = std::make_shared<ColumnLowCardinalityT<ColumnFixedString>>(fixed_size);
+    
+    ASSERT_EQ(fixed_size, col->GetNestedType()->As<FixedStringType>()->GetSize());
+}
 
 TEST(ColumnsCase, ColumnTupleT) {
     using TestTuple = ColumnTupleT<ColumnUInt64, ColumnString, ColumnFixedString>;

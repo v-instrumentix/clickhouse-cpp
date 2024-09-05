@@ -8,6 +8,8 @@
 
 #include <string_view>
 #include <cstring>
+#include <cmath>
+#include <type_traits>
 
 namespace clickhouse {
     class Block;
@@ -141,7 +143,8 @@ struct PrintContainer;
 
 template <typename Left, typename Right>
 ::testing::AssertionResult CompareRecursive(const Left & left, const Right & right) {
-    if constexpr ((is_container_v<Left> || std::is_base_of_v<clickhouse::Column, std::decay_t<Left>>)
+    if constexpr (!is_string_v<Left> && !is_string_v<Right>
+            && (is_container_v<Left> || std::is_base_of_v<clickhouse::Column, std::decay_t<Left>>)
             && (is_container_v<Right> || std::is_base_of_v<clickhouse::Column, std::decay_t<Right>>) ) {
 
         const auto & l = maybeWrapColumnAsContainer(left);
@@ -153,10 +156,31 @@ template <typename Left, typename Right>
             return result << "\nExpected container: " << PrintContainer{l}
                           << "\nActual container  : " << PrintContainer{r};
     } else {
-        if (left != right)
+        if (left != right) {
+
+            // Handle std::optional<float>(nan)
+            // I'm too lazy to code comparison against std::nullopt, but this shpudn't be a problem in real life.
+            // RN comparing against std::nullopt, you'll receive an compilation error.
+            if constexpr (is_instantiation_of<std::optional, Left>::value && is_instantiation_of<std::optional, Right>::value)
+            {
+                if (left.has_value() && right.has_value())
+                    return CompareRecursive(*left, *right);
+            }
+            else if constexpr (is_instantiation_of<std::optional, Left>::value) {
+                if (left)
+                    return CompareRecursive(*left, right);
+            } else if constexpr (is_instantiation_of<std::optional, Right>::value) {
+                if (right)
+                    return CompareRecursive(left, *right);
+            } else if constexpr (std::is_floating_point_v<Left> && std::is_floating_point_v<Right>) {
+                if (std::isnan(left) && std::isnan(right))
+                    return ::testing::AssertionSuccess();
+            }
+
             return ::testing::AssertionFailure()
                     << "\nExpected value: " << left
                     << "\nActual value  : " << right;
+        }
 
         return ::testing::AssertionSuccess();
     }

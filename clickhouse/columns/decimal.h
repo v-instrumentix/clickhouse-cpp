@@ -18,8 +18,11 @@ public:
     void Append(const std::string& value);
 
     Int128 At(size_t i) const;
+    inline auto operator[](size_t i) const { return At(i); }
 
 public:
+    /// Increase the capacity of the column for large block insertion.
+    void Reserve(size_t new_cap) override;
     void Append(ColumnRef column) override;
     bool LoadBody(InputStream* input, size_t rows) override;
     void SaveBody(OutputStream* output) override;

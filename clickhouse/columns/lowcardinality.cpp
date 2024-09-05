@@ -174,6 +174,11 @@ ColumnLowCardinality::ColumnLowCardinality(std::shared_ptr<ColumnNullable> dicti
 ColumnLowCardinality::~ColumnLowCardinality()
 {}
 
+void ColumnLowCardinality::Reserve(size_t new_cap) {
+    dictionary_column_->Reserve(new_cap);
+    index_column_->Reserve(new_cap);
+}
+
 void ColumnLowCardinality::Setup(ColumnRef dictionary_column) {
     AppendDefaultItem();
 
@@ -199,7 +204,7 @@ std::uint64_t ColumnLowCardinality::getDictionaryIndex(std::uint64_t item_index)
 void ColumnLowCardinality::appendIndex(std::uint64_t item_index) {
     // TODO (nemkov): handle case when index should go from UInt8 to UInt16, etc.
     VisitIndexColumn([item_index](auto & arg) {
-        arg.Append(item_index);
+        arg.Append(static_cast<typename std::decay_t<decltype(arg)>::DataType>(item_index));
     }, *index_column_);
 }
 
@@ -227,12 +232,21 @@ ColumnRef ColumnLowCardinality::GetDictionary() {
 }
 
 void ColumnLowCardinality::Append(ColumnRef col) {
-    auto c = col->As<ColumnLowCardinality>();
-    if (!c || !dictionary_column_->Type()->IsEqual(c->dictionary_column_->Type()))
-        return;
+    // Append values from col only if it is either
+    // - exactly same type as `this`: LowCardinality wrapping same dictionary type
+    // - same type as dictionary column
 
-    for (size_t i = 0; i < c->Size(); ++i) {
-        AppendUnsafe(c->GetItem(i));
+    auto c = col->As<ColumnLowCardinality>();
+    // If not LowCardinality of same dictionary type
+    if (!c || !dictionary_column_->Type()->IsEqual(c->dictionary_column_->Type())) {
+        // If not column of the same type as dictionary type
+        if (!dictionary_column_->Type()->IsEqual(col->GetType())) {
+            return;
+        }
+    }
+
+    for (size_t i = 0; i < col->Size(); ++i) {
+        AppendUnsafe(col->GetItem(i));
     }
 }
 

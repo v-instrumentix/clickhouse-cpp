@@ -12,6 +12,7 @@ public:
 
     ColumnEnum(TypeRef type);
     ColumnEnum(TypeRef type, const std::vector<T>& data);
+    ColumnEnum(TypeRef type, std::vector<T>&& data);
 
     /// Appends one element to the end of column.
     void Append(const T& value, bool checkValue = false);
@@ -22,13 +23,16 @@ public:
     std::string_view NameAt(size_t n) const;
 
     /// Returns element at given row number.
-    const T& operator[] (size_t n) const;
+    inline const T& operator[] (size_t n) const { return At(n); }
 
     /// Set element at given row number.
     void SetAt(size_t n, const T& value, bool checkValue = false);
     void SetNameAt(size_t n, const std::string& name);
 
 public:
+    /// Increase the capacity of the column for large block insertion.
+    void Reserve(size_t new_cap) override;
+
     /// Appends content of given column to the end of current one.
     void Append(ColumnRef column) override;
 

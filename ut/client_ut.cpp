@@ -1,16 +1,38 @@
 #include <clickhouse/client.h>
 
+#include "clickhouse/base/socket.h"
+#include "clickhouse/version.h"
+#include "clickhouse/error_codes.h"
+
 #include "readonly_client_test.h"
 #include "connection_failed_client_test.h"
+#include "ut/utils_comparison.h"
 #include "utils.h"
+#include "ut/roundtrip_column.h"
+#include "ut/value_generators.h"
 
 #include <gtest/gtest.h>
 
+#include <memory>
 #include <optional>
+#include <ostream>
+#include <string_view>
 #include <thread>
 #include <chrono>
 
 using namespace clickhouse;
+
+template <typename T>
+std::shared_ptr<T> createTableWithOneColumn(Client & client, const std::string & table_name, const std::string & column_name)
+{
+    auto col = std::make_shared<T>();
+    const auto type_name = col->GetType().GetName();
+
+    client.Execute("DROP TEMPORARY TABLE IF EXISTS " + table_name + ";");
+    client.Execute("CREATE TEMPORARY TABLE IF NOT EXISTS " + table_name + "( " + column_name + " " + type_name + " )");
+
+    return col;
+}
 
 // Use value-parameterized tests to run same tests with different client
 // options.
@@ -27,13 +49,9 @@ protected:
     template <typename T>
     std::shared_ptr<T> createTableWithOneColumn(Block & block)
     {
-        auto col = std::make_shared<T>();
-        const auto type_name = col->GetType().GetName();
+        auto col = ::createTableWithOneColumn<T>(*client_, table_name, column_name);
 
-        client_->Execute("DROP TEMPORARY TABLE IF EXISTS " + table_name + ";");
-        client_->Execute("CREATE TEMPORARY TABLE IF NOT EXISTS " + table_name + "( " + column_name + " " + type_name + " )");
-
-        block.AppendColumn("test_column", col);
+        block.AppendColumn(column_name, col);
 
         return col;
     }
@@ -71,6 +89,21 @@ protected:
     const std::string table_name = "test_clickhouse_cpp_test_ut_table";
     const std::string column_name = "test_column";
 };
+
+TEST_P(ClientCase, Version) {
+    auto version = client_->GetVersion();
+    EXPECT_NE(0, CLICKHOUSE_CPP_VERSION);
+
+    EXPECT_GE(2, CLICKHOUSE_CPP_VERSION_MAJOR);
+    EXPECT_LE(0, CLICKHOUSE_CPP_VERSION_MINOR);
+    EXPECT_LE(0, CLICKHOUSE_CPP_VERSION_PATCH);
+
+    EXPECT_EQ(CLICKHOUSE_CPP_VERSION_MAJOR, version.major);
+    EXPECT_EQ(CLICKHOUSE_CPP_VERSION_MINOR, version.minor);
+    EXPECT_EQ(CLICKHOUSE_CPP_VERSION_PATCH, version.patch);
+    EXPECT_EQ(CLICKHOUSE_CPP_VERSION_BUILD, version.build);
+    EXPECT_EQ(CLICKHOUSE_CPP_VERSION_PATCH, version.patch);
+}
 
 TEST_P(ClientCase, Array) {
     Block b;
@@ -402,21 +435,29 @@ TEST_P(ClientCase, Nullable) {
 }
 
 TEST_P(ClientCase, Numbers) {
-    size_t num = 0;
+    try {
+        size_t num = 0;
 
-    client_->Select("SELECT number, number FROM system.numbers LIMIT 100000", [&num](const Block& block)
-        {
-            if (block.GetRowCount() == 0) {
-                return;
-            }
-            auto col = block[0]->As<ColumnUInt64>();
+        client_->Select("SELECT number, number FROM system.numbers LIMIT 1000", [&num](const Block& block)
+            {
+                if (block.GetRowCount() == 0) {
+                    return;
+                }
+                auto col = block[0]->As<ColumnUInt64>();
 
-            for (size_t i = 0; i < col->Size(); ++i, ++num) {
-                EXPECT_EQ(num, col->At(i));
+                for (size_t i = 0; i < col->Size(); ++i, ++num) {
+                    EXPECT_EQ(num, col->At(i));
+                }
             }
-        }
-    );
-    EXPECT_EQ(100000U, num);
+        );
+        EXPECT_EQ(1000U, num);
+    }
+    catch (const clickhouse::ServerError & e) {
+        if (e.GetCode() == ErrorCodes::ACCESS_DENIED)
+            GTEST_SKIP() << e.what() << " : " << GetParam();
+        else
+            throw;
+    }
 }
 
 TEST_P(ClientCase, SimpleAggregateFunction) {
@@ -430,7 +471,7 @@ TEST_P(ClientCase, SimpleAggregateFunction) {
             "CREATE TEMPORARY TABLE IF NOT EXISTS test_clickhouse_cpp_SimpleAggregateFunction (saf SimpleAggregateFunction(sum, UInt64))");
 
     constexpr size_t EXPECTED_ROWS = 10;
-    client_->Execute("INSERT INTO test_clickhouse_cpp_SimpleAggregateFunction (saf) SELECT number FROM system.numbers LIMIT 10");
+    client_->Execute("INSERT INTO test_clickhouse_cpp_SimpleAggregateFunction (saf) VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9)");
 
     size_t total_rows = 0;
     client_->Select("Select * FROM test_clickhouse_cpp_SimpleAggregateFunction", [&total_rows](const Block & block) {
@@ -1118,24 +1159,31 @@ TEST_P(ClientCase, OnProfileEvents) {
 }
 
 TEST_P(ClientCase, OnProfile) {
-    Query query("SELECT * FROM system.numbers LIMIT 10;");
+    try {
+        Query query("SELECT * FROM system.numbers LIMIT 10;");
 
-    std::optional<Profile> profile;
-    query.OnProfile([&profile](const Profile & new_profile) {
-        profile = new_profile;
-    });
+        std::optional<Profile> profile;
+        query.OnProfile([&profile](const Profile & new_profile) {
+            profile = new_profile;
+        });
 
-    client_->Execute(query);
+        client_->Execute(query);
 
-    // Make sure that profile event came through
-    ASSERT_NE(profile, std::nullopt);
+        // Make sure that profile event came through
+        ASSERT_NE(profile, std::nullopt);
 
-    EXPECT_GE(profile->rows, 10u);
-    EXPECT_GE(profile->blocks, 1u);
-    EXPECT_GT(profile->bytes, 1u);
-    EXPECT_GE(profile->rows_before_limit, 10u);
-    EXPECT_EQ(profile->applied_limit, true);
-    EXPECT_EQ(profile->calculated_rows_before_limit, true);
+        EXPECT_GE(profile->rows, 10u);
+        EXPECT_GE(profile->blocks, 1u);
+        EXPECT_GT(profile->bytes, 1u);
+        EXPECT_GE(profile->rows_before_limit, 10u);
+        EXPECT_EQ(profile->applied_limit, true);
+        EXPECT_EQ(profile->calculated_rows_before_limit, true);
+    } catch (const clickhouse::ServerError & e) {
+        if (e.GetCode() == ErrorCodes::ACCESS_DENIED)
+            GTEST_SKIP() << e.what() << " : " << GetParam();
+        else
+            throw;
+    }
 }
 
 TEST_P(ClientCase, SelectAggregateFunction) {
@@ -1196,6 +1244,7 @@ INSTANTIATE_TEST_SUITE_P(ClientLocalReadonly, ReadonlyClientTest,
     }
 ));
 
+
 INSTANTIATE_TEST_SUITE_P(ClientLocalFailed, ConnectionFailedClientTest,
     ::testing::Values(ConnectionFailedClientTest::ParamType{
         ClientOptions()
@@ -1210,3 +1259,232 @@ INSTANTIATE_TEST_SUITE_P(ClientLocalFailed, ConnectionFailedClientTest,
         ExpectingException{"Authentication failed: password is incorrect"}
     }
 ));
+
+
+class ConnectionSuccessTestCase : public testing::TestWithParam<ClientOptions> {};
+
+TEST_P(ConnectionSuccessTestCase, SuccessConnectionEstablished) {
+    const auto & client_options = GetParam();
+    std::unique_ptr<Client> client;
+
+    try {
+        client = std::make_unique<Client>(client_options);
+        auto endpoint = client->GetCurrentEndpoint().value();
+        ASSERT_EQ("localhost", endpoint.host);
+        ASSERT_EQ(9000u, endpoint.port);
+        SUCCEED();
+    } catch (const std::exception & e) {
+        FAIL() << "Got an unexpected exception : " << e.what();
+    }
+}
+
+
+INSTANTIATE_TEST_SUITE_P(ClientMultipleEndpoints, ConnectionSuccessTestCase,
+    ::testing::Values(ClientCase::ParamType{
+        ClientOptions()
+            .SetEndpoints({
+                      {"somedeadhost", 9000}
+                    , {"deadaginghost", 1245}
+                    , {"localhost", 9000}
+                    , {"noalocalhost", 6784}
+                })
+            .SetUser(           getEnvOrDefault("CLICKHOUSE_USER",     "default"))
+            .SetPassword(       getEnvOrDefault("CLICKHOUSE_PASSWORD", ""))
+            .SetDefaultDatabase(getEnvOrDefault("CLICKHOUSE_DB",       "default"))
+            .SetPingBeforeQuery(true)
+            .SetConnectionConnectTimeout(std::chrono::milliseconds(200))
+            .SetRetryTimeout(std::chrono::seconds(1)),
+    }
+));
+
+INSTANTIATE_TEST_SUITE_P(ClientMultipleEndpointsWithDefaultPort, ConnectionSuccessTestCase,
+    ::testing::Values(ClientCase::ParamType{
+        ClientOptions()
+            .SetEndpoints({
+                      {"somedeadhost"}
+                    , {"deadaginghost", 1245}
+                    , {"localhost"}
+                    , {"noalocalhost", 6784}
+                })
+            .SetUser(           getEnvOrDefault("CLICKHOUSE_USER",     "default"))
+            .SetPassword(       getEnvOrDefault("CLICKHOUSE_PASSWORD", ""))
+            .SetDefaultDatabase(getEnvOrDefault("CLICKHOUSE_DB",       "default"))
+            .SetPingBeforeQuery(true)
+            .SetConnectionConnectTimeout(std::chrono::milliseconds(200))
+            .SetRetryTimeout(std::chrono::seconds(1)),
+    }
+));
+
+INSTANTIATE_TEST_SUITE_P(MultipleEndpointsFailed, ConnectionFailedClientTest,
+    ::testing::Values(ConnectionFailedClientTest::ParamType{
+        ClientOptions()
+            .SetEndpoints({
+                     {"deadaginghost", 9000}
+                    ,{"somedeadhost",  1245}
+                    ,{"noalocalhost",  6784}
+                })
+            .SetUser(           getEnvOrDefault("CLICKHOUSE_USER",     "default"))
+            .SetPassword(       getEnvOrDefault("CLICKHOUSE_PASSWORD", ""))
+            .SetDefaultDatabase(getEnvOrDefault("CLICKHOUSE_DB",       "default"))
+            .SetPingBeforeQuery(true)
+            .SetConnectionConnectTimeout(std::chrono::milliseconds(200))
+            .SetRetryTimeout(std::chrono::seconds(1)),
+        ExpectingException{""}
+    }
+));
+
+class ResetConnectionTestCase : public testing::TestWithParam<ClientOptions> {};
+
+TEST_P(ResetConnectionTestCase, ResetConnectionEndpointTest) {
+    const auto & client_options = GetParam();
+    std::unique_ptr<Client> client;
+
+    try {
+        client = std::make_unique<Client>(client_options);
+        auto endpoint = client->GetCurrentEndpoint().value();
+        ASSERT_EQ("localhost", endpoint.host);
+        ASSERT_EQ(9000u, endpoint.port);
+
+        client->ResetConnectionEndpoint();
+        endpoint = client->GetCurrentEndpoint().value();
+        ASSERT_EQ("127.0.0.1", endpoint.host);
+        ASSERT_EQ(9000u, endpoint.port);
+
+        client->ResetConnectionEndpoint();
+
+        endpoint = client->GetCurrentEndpoint().value();
+        ASSERT_EQ("localhost", endpoint.host);
+        ASSERT_EQ(9000u, endpoint.port);
+
+        SUCCEED();
+    } catch (const std::exception & e) {
+        FAIL() << "Got an unexpected exception : " << e.what();
+    }
+}
+
+TEST_P(ResetConnectionTestCase, ResetConnectionTest) {
+    const auto & client_options = GetParam();
+    std::unique_ptr<Client> client;
+
+    try {
+        client = std::make_unique<Client>(client_options);
+        auto endpoint = client->GetCurrentEndpoint().value();
+        ASSERT_EQ("localhost", endpoint.host);
+        ASSERT_EQ(9000u, endpoint.port);
+
+        client->ResetConnection();
+        endpoint = client->GetCurrentEndpoint().value();
+        ASSERT_EQ("localhost", endpoint.host);
+        ASSERT_EQ(9000u, endpoint.port);
+
+        SUCCEED();
+    } catch (const std::exception & e) {
+        FAIL() << "Got an unexpected exception : " << e.what();
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(ResetConnectionClientTest, ResetConnectionTestCase,
+    ::testing::Values(ResetConnectionTestCase::ParamType {
+        ClientOptions()
+            .SetEndpoints({
+                     {"localhost", 9000}
+                    ,{"somedeadhost",  1245}
+                    ,{"noalocalhost",  6784}
+                    ,{"127.0.0.1", 9000}
+                })
+            .SetUser(           getEnvOrDefault("CLICKHOUSE_USER",     "default"))
+            .SetPassword(       getEnvOrDefault("CLICKHOUSE_PASSWORD", ""))
+            .SetDefaultDatabase(getEnvOrDefault("CLICKHOUSE_DB",       "default"))
+            .SetPingBeforeQuery(true)
+            .SetConnectionConnectTimeout(std::chrono::milliseconds(200))
+            .SetRetryTimeout(std::chrono::seconds(1))
+    }
+));
+
+struct CountingSocketFactoryAdapter : public SocketFactory {
+
+    using ConnectRequests = std::vector<std::pair<ClientOptions, Endpoint>>;
+
+    SocketFactory & socket_factory;
+    ConnectRequests & connect_requests;
+
+    CountingSocketFactoryAdapter(SocketFactory & socket_factory, ConnectRequests& connect_requests)
+        : socket_factory(socket_factory)
+        , connect_requests(connect_requests)
+    {}
+
+    std::unique_ptr<SocketBase> connect(const ClientOptions& opts, const Endpoint& endpoint) {
+        connect_requests.emplace_back(opts, endpoint);
+
+        return socket_factory.connect(opts, endpoint);
+    }
+
+    void sleepFor(const std::chrono::milliseconds& duration) {
+        return socket_factory.sleepFor(duration);
+    }
+
+    size_t GetConnectRequestsCount() const {
+        return connect_requests.size();
+    }
+
+};
+
+TEST(SimpleClientTest, issue_335) {
+    // Make sure Client connects to server even with ClientOptions.SetSendRetries(0)
+    auto vals = MakeStrings();
+    auto col = std::make_shared<ColumnString>(vals);
+
+    CountingSocketFactoryAdapter::ConnectRequests connect_requests;
+    std::unique_ptr<SocketFactory> wrapped_socket_factory = std::make_unique<NonSecureSocketFactory>();
+    std::unique_ptr<SocketFactory> socket_factory = std::make_unique<CountingSocketFactoryAdapter>(*wrapped_socket_factory, connect_requests);
+
+    Client client(ClientOptions(LocalHostEndpoint)
+                      .SetSendRetries(0), // <<=== crucial for reproducing https://github.com/ClickHouse/clickhouse-cpp/issues/335
+                  std::move(socket_factory));
+
+    EXPECT_EQ(1u, connect_requests.size());
+    EXPECT_TRUE(CompareRecursive(vals, *RoundtripColumnValuesTyped(client, col)));
+
+    connect_requests.clear();
+
+    client.ResetConnection();
+    EXPECT_EQ(1u, connect_requests.size());
+    EXPECT_TRUE(CompareRecursive(vals, *RoundtripColumnValuesTyped(client, col)));
+
+    connect_requests.clear();
+
+    client.ResetConnectionEndpoint();
+    EXPECT_EQ(1u, connect_requests.size());
+    EXPECT_TRUE(CompareRecursive(vals, *RoundtripColumnValuesTyped(client, col)));
+}
+
+TEST(SimpleClientTest, issue_335_reconnects_count) {
+    // Make sure that client attempts to connect to each endpoint at least once.
+    CountingSocketFactoryAdapter::ConnectRequests connect_requests;
+    std::unique_ptr<SocketFactory> wrapped_socket_factory = std::make_unique<NonSecureSocketFactory>();
+    std::unique_ptr<SocketFactory> socket_factory = std::make_unique<CountingSocketFactoryAdapter>(*wrapped_socket_factory, connect_requests);
+
+    const std::vector<Endpoint> endpoints = {
+        Endpoint{"foo-invalid-hostname", 1234},
+        Endpoint{"bar-invalid-hostname", 4567},
+    };
+
+    EXPECT_ANY_THROW(
+        Client(ClientOptions()
+                          .SetEndpoints(endpoints)
+                          .SetSendRetries(0), // <<=== crucial for reproducing https://github.com/ClickHouse/clickhouse-cpp/issues/335
+                      std::move(socket_factory));
+    );
+
+    EXPECT_EQ(endpoints.size(), connect_requests.size());
+    // make sure there was an attempt to connect to each endpoint at least once.
+    for (const auto & endpoint : endpoints)
+    {
+        auto p = std::find_if(connect_requests.begin(), connect_requests.end(), [&endpoint](const auto & connect_request) {
+            return connect_request.second == endpoint;
+        });
+
+        EXPECT_TRUE(connect_requests.end() != p)
+            << "\tThere was no attempt to connect to endpoint " << endpoint;
+    }
+}

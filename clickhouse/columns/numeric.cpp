@@ -39,6 +39,21 @@ void ColumnVector<T>::Erase(size_t pos, size_t count) {
 }
 
 template <typename T>
+std::vector<T>& ColumnVector<T>::GetWritableData() {
+    return data_;
+}
+
+template <typename T>
+void ColumnVector<T>::Reserve(size_t new_cap) {
+    data_.reserve(new_cap);
+}
+
+template <typename T>
+size_t ColumnVector<T>::Capacity() const {
+    return data_.capacity();
+}
+
+template <typename T>
 void ColumnVector<T>::Clear() {
     data_.clear();
 }
@@ -46,11 +61,6 @@ void ColumnVector<T>::Clear() {
 template <typename T>
 const T& ColumnVector<T>::At(size_t n) const {
     return data_.at(n);
-}
-
-template <typename T>
-const T& ColumnVector<T>::operator [] (size_t n) const {
-    return data_[n];
 }
 
 template <typename T>

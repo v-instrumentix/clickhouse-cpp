@@ -54,9 +54,9 @@ const typename ColumnGeo<NestedColumnType, type_code>::ValueType ColumnGeo<Neste
     return data_->At(n);
 }
 
-template <typename NestedColumnType, Type::Code type_code>
-const typename ColumnGeo<NestedColumnType, type_code>::ValueType ColumnGeo<NestedColumnType, type_code>::operator[](size_t n) const {
-    return data_->At(n);
+template<typename NestedColumnType, Type::Code type_code>
+void ColumnGeo<NestedColumnType, type_code>::Reserve(size_t new_cap) {
+    data_->Reserve(new_cap);
 }
 
 template <typename NestedColumnType, Type::Code type_code>

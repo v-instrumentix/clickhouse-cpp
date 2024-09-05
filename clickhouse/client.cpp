@@ -1,4 +1,5 @@
 #include "client.h"
+#include "clickhouse/version.h"
 #include "protocol.h"
 
 #include "base/compressed.h"
@@ -8,20 +9,15 @@
 #include "columns/factory.h"
 
 #include <assert.h>
-#include <atomic>
 #include <system_error>
-#include <thread>
 #include <vector>
 #include <sstream>
-#include <stdexcept>
 
 #if defined(WITH_OPENSSL)
 #include "base/sslsocket.h"
 #endif
 
 #define DBMS_NAME                                       "ClickHouse"
-#define DBMS_VERSION_MAJOR                              2
-#define DBMS_VERSION_MINOR                              1
 
 #define DBMS_MIN_REVISION_WITH_TEMPORARY_TABLES         50264
 #define DBMS_MIN_REVISION_WITH_TOTAL_ROWS_IN_PROGRESS   51554
@@ -43,7 +39,7 @@
 #define DBMS_MIN_REVISION_WITH_INITIAL_QUERY_START_TIME 54449
 #define DBMS_MIN_REVISION_WITH_INCREMENTAL_PROFILE_EVENTS 54451
 
-#define REVISION  DBMS_MIN_REVISION_WITH_INCREMENTAL_PROFILE_EVENTS
+#define DMBS_PROTOCOL_REVISION  DBMS_MIN_REVISION_WITH_INCREMENTAL_PROFILE_EVENTS
 
 namespace clickhouse {
 
@@ -63,13 +59,36 @@ struct ClientInfo {
     uint32_t client_revision = 0;
 };
 
+std::ostream& operator<<(std::ostream& os, const Endpoint& endpoint) {
+    return os << endpoint.host << ":" << endpoint.port;
+}
+
 std::ostream& operator<<(std::ostream& os, const ClientOptions& opt) {
-    os << "Client(" << opt.user << '@' << opt.host << ":" << opt.port
+    os << "Client("
+       << " Endpoints : [";
+    size_t extra_endpoints = 0;
+
+    if (!opt.host.empty()) {
+        extra_endpoints = 1;
+        os << opt.user << '@' << Endpoint{opt.host, opt.port};
+
+        if (opt.endpoints.size())
+            os << ", ";
+    }
+
+    for (size_t i = 0; i < opt.endpoints.size(); i++) {
+        os << opt.user << '@' << opt.endpoints[i]
+           << ((i == opt.endpoints.size() - 1) ? "" : ", ");
+    }
+
+    os << "] (" << opt.endpoints.size() + extra_endpoints << " items )"
        << " ping_before_query:" << opt.ping_before_query
        << " send_retries:" << opt.send_retries
        << " retry_timeout:" << opt.retry_timeout.count()
        << " compression_method:"
-       << (opt.compression_method == CompressionMethod::LZ4 ? "LZ4" : "None");
+       << (opt.compression_method == CompressionMethod::LZ4    ? "LZ4"
+           : opt.compression_method == CompressionMethod::ZSTD ? "ZSTD"
+                                                               : "None");
 #if defined(WITH_OPENSSL)
     if (opt.ssl_options) {
         const auto & ssl_options = *opt.ssl_options;
@@ -111,6 +130,15 @@ std::unique_ptr<SocketFactory> GetSocketFactory(const ClientOptions& opts) {
         return std::make_unique<NonSecureSocketFactory>();
 }
 
+std::unique_ptr<EndpointsIteratorBase> GetEndpointsIterator(const ClientOptions& opts) {
+    if (opts.endpoints.empty())
+    {
+        throw ValidationError("The list of endpoints is empty");
+    }
+
+    return std::make_unique<RoundRobinEndpointsIterator>(opts.endpoints);
+}
+
 }
 
 class Client::Impl {
@@ -130,7 +158,11 @@ public:
 
     void ResetConnection();
 
+    void ResetConnectionEndpoint();
+
     const ServerInfo& GetServerInfo() const;
+
+    const std::optional<Endpoint>& GetCurrentEndpoint() const;
 
 private:
     bool Handshake();
@@ -155,12 +187,21 @@ private:
 
     void WriteBlock(const Block& block, OutputStream& output);
 
+    void CreateConnection();
+
     void InitializeStreams(std::unique_ptr<SocketBase>&& socket);
+
+    inline size_t GetConnectionAttempts() const
+    {
+        return options_.endpoints.size() * options_.send_retries;
+    }
 
 private:
     /// In case of network errors tries to reconnect to server and
     /// call fuc several times.
     void RetryGuard(std::function<void()> func);
+
+    void RetryConnectToTheEndpoint(std::function<void()>& func);
 
 private:
     class EnsureNull {
@@ -194,32 +235,34 @@ private:
     std::unique_ptr<InputStream> input_;
     std::unique_ptr<OutputStream> output_;
     std::unique_ptr<SocketBase> socket_;
+    std::unique_ptr<EndpointsIteratorBase> endpoints_iterator;
+
+    std::optional<Endpoint> current_endpoint_;
 
     ServerInfo server_info_;
 };
 
+ClientOptions modifyClientOptions(ClientOptions opts)
+{
+    if (opts.host.empty())
+        return opts;
+
+    Endpoint default_endpoint({opts.host, opts.port});
+    opts.endpoints.emplace(opts.endpoints.begin(), default_endpoint);
+    return opts;
+}
 
 Client::Impl::Impl(const ClientOptions& opts)
     : Impl(opts, GetSocketFactory(opts)) {}
 
 Client::Impl::Impl(const ClientOptions& opts,
                    std::unique_ptr<SocketFactory> socket_factory)
-    : options_(opts)
+    : options_(modifyClientOptions(opts))
     , events_(nullptr)
     , socket_factory_(std::move(socket_factory))
+    , endpoints_iterator(GetEndpointsIterator(options_))
 {
-    for (unsigned int i = 0; ; ) {
-        try {
-            ResetConnection();
-            break;
-        } catch (const std::system_error&) {
-            if (++i > options_.send_retries) {
-                throw;
-            }
-
-            socket_factory_->sleepFor(options_.retry_timeout);
-        }
-    }
+    CreateConnection();
 
     if (options_.compression_method != CompressionMethod::None) {
         compression_ = CompressionState::Enable;
@@ -329,15 +372,58 @@ void Client::Impl::Ping() {
 }
 
 void Client::Impl::ResetConnection() {
-    InitializeStreams(socket_factory_->connect(options_));
+    InitializeStreams(socket_factory_->connect(options_, current_endpoint_.value()));
 
     if (!Handshake()) {
         throw ProtocolError("fail to connect to " + options_.host);
     }
 }
 
+void Client::Impl::ResetConnectionEndpoint() {
+    current_endpoint_.reset();
+    for (size_t i = 0; i < options_.endpoints.size();)
+    {
+        try
+        {
+            current_endpoint_ = endpoints_iterator->Next();
+            ResetConnection();
+            return;
+        } catch (const std::system_error&) {
+            if (++i == options_.endpoints.size())
+            {
+                current_endpoint_.reset();
+                throw;
+            }
+        }
+    }
+}
+
+void Client::Impl::CreateConnection() {
+    // make sure to try to connect to each endpoint at least once even if `options_.send_retries` is 0
+    const size_t max_attempts = (options_.send_retries ? options_.send_retries : 1);
+    for (size_t i = 0; i < max_attempts;)
+    {
+        try
+        {
+            // Try to connect to each endpoint before throwing exception.
+            ResetConnectionEndpoint();
+            return;
+        } catch (const std::system_error&) {
+            if (++i >= max_attempts)
+            {
+                throw;
+            }
+        }
+    }
+}
+
 const ServerInfo& Client::Impl::GetServerInfo() const {
     return server_info_;
+}
+
+
+const std::optional<Endpoint>& Client::Impl::GetCurrentEndpoint() const {
+    return current_endpoint_;
 }
 
 bool Client::Impl::Handshake() {
@@ -411,12 +497,12 @@ bool Client::Impl::ReceivePacket(uint64_t* server_packet) {
         if (!WireFormat::ReadUInt64(*input_, &info.bytes)) {
             return false;
         }
-        if (REVISION >= DBMS_MIN_REVISION_WITH_TOTAL_ROWS_IN_PROGRESS) {
+        if constexpr(DMBS_PROTOCOL_REVISION >= DBMS_MIN_REVISION_WITH_TOTAL_ROWS_IN_PROGRESS) {
             if (!WireFormat::ReadUInt64(*input_, &info.total_rows)) {
                 return false;
             }
         }
-        if (REVISION >= DBMS_MIN_REVISION_WITH_CLIENT_WRITE_INFO)
+        if constexpr (DMBS_PROTOCOL_REVISION >= DBMS_MIN_REVISION_WITH_CLIENT_WRITE_INFO)
         {
             if (!WireFormat::ReadUInt64(*input_, &info.written_rows)) {
                 return false;
@@ -499,13 +585,11 @@ bool Client::Impl::ReceivePacket(uint64_t* server_packet) {
         throw UnimplementedError("unimplemented " + std::to_string((int)packet_type));
         break;
     }
-
-    return false;
 }
 
 bool Client::Impl::ReadBlock(InputStream& input, Block* block) {
     // Additional information about block.
-    if (REVISION >= DBMS_MIN_REVISION_WITH_BLOCK_INFO) {
+    if constexpr (DMBS_PROTOCOL_REVISION >= DBMS_MIN_REVISION_WITH_BLOCK_INFO) {
         uint64_t num;
         BlockInfo info;
 
@@ -542,9 +626,9 @@ bool Client::Impl::ReadBlock(InputStream& input, Block* block) {
     CreateColumnByTypeSettings create_column_settings;
     create_column_settings.low_cardinality_as_wrapped_column = options_.backward_compatibility_lowcardinality_as_wrapped_column;
 
-    std::string name;
-    std::string type;
     for (size_t i = 0; i < num_columns; ++i) {
+        std::string name;
+        std::string type;
         if (!WireFormat::ReadString(input, &name)) {
             return false;
         }
@@ -571,7 +655,7 @@ bool Client::Impl::ReadBlock(InputStream& input, Block* block) {
 bool Client::Impl::ReceiveData() {
     Block block;
 
-    if (REVISION >= DBMS_MIN_REVISION_WITH_TEMPORARY_TABLES) {
+    if constexpr (DMBS_PROTOCOL_REVISION >= DBMS_MIN_REVISION_WITH_TEMPORARY_TABLES) {
         if (!WireFormat::SkipString(*input_)) {
             return false;
         }
@@ -661,9 +745,10 @@ void Client::Impl::SendQuery(const Query& query) {
 
         info.query_kind = 1;
         info.client_name = "ClickHouse client";
-        info.client_version_major = DBMS_VERSION_MAJOR;
-        info.client_version_minor = DBMS_VERSION_MINOR;
-        info.client_revision = REVISION;
+        info.client_version_major = CLICKHOUSE_CPP_VERSION_MAJOR;
+        info.client_version_minor = CLICKHOUSE_CPP_VERSION_MINOR;
+        info.client_version_patch = CLICKHOUSE_CPP_VERSION_PATCH;
+        info.client_revision = DMBS_PROTOCOL_REVISION;
 
 
         WireFormat::WriteFixed(*output_, info.query_kind);
@@ -777,9 +862,8 @@ void Client::Impl::SendData(const Block& block) {
     }
 
     if (compression_ == CompressionState::Enable) {
-        assert(options_.compression_method == CompressionMethod::LZ4);
 
-        std::unique_ptr<OutputStream> compressed_output = std::make_unique<CompressedOutput>(output_.get(), options_.max_compression_chunk_size);
+        std::unique_ptr<OutputStream> compressed_output = std::make_unique<CompressedOutput>(output_.get(), options_.max_compression_chunk_size, options_.compression_method);
         BufferedOutput buffered(std::move(compressed_output), options_.max_compression_chunk_size);
 
         WriteBlock(block, buffered);
@@ -802,9 +886,9 @@ void Client::Impl::InitializeStreams(std::unique_ptr<SocketBase>&& socket) {
 bool Client::Impl::SendHello() {
     WireFormat::WriteUInt64(*output_, ClientCodes::Hello);
     WireFormat::WriteString(*output_, std::string(DBMS_NAME) + " client");
-    WireFormat::WriteUInt64(*output_, DBMS_VERSION_MAJOR);
-    WireFormat::WriteUInt64(*output_, DBMS_VERSION_MINOR);
-    WireFormat::WriteUInt64(*output_, REVISION);
+    WireFormat::WriteUInt64(*output_, CLICKHOUSE_CPP_VERSION_MAJOR);
+    WireFormat::WriteUInt64(*output_, CLICKHOUSE_CPP_VERSION_MINOR);
+    WireFormat::WriteUInt64(*output_, DMBS_PROTOCOL_REVISION);
     WireFormat::WriteString(*output_, options_.default_database);
     WireFormat::WriteString(*output_, options_.user);
     WireFormat::WriteString(*output_, options_.password);
@@ -863,21 +947,45 @@ bool Client::Impl::ReceiveHello() {
 }
 
 void Client::Impl::RetryGuard(std::function<void()> func) {
-    for (unsigned int i = 0; ; ++i) {
-        try {
+
+    if (current_endpoint_)
+    {
+        for (unsigned int i = 0; ; ++i) {
+            try {
+                func();
+                return;
+            } catch (const std::system_error&) {
+                bool ok = true;
+
+                try {
+                    socket_factory_->sleepFor(options_.retry_timeout);
+                    ResetConnection();
+                } catch (...) {
+                    ok = false;
+                }
+
+                if (!ok && i == options_.send_retries) {
+                    break;
+                }
+            }
+        }
+    }
+    // Connectiong with current_endpoint_ are broken.
+    // Trying to establish  with the another one from the list.
+    size_t connection_attempts_count = GetConnectionAttempts();
+    for (size_t i = 0; i < connection_attempts_count;)
+    {
+        try
+        {
+            socket_factory_->sleepFor(options_.retry_timeout);
+            current_endpoint_ = endpoints_iterator->Next();
+            ResetConnection();
             func();
             return;
         } catch (const std::system_error&) {
-            bool ok = true;
-
-            try {
-                socket_factory_->sleepFor(options_.retry_timeout);
-                ResetConnection();
-            } catch (...) {
-                ok = false;
-            }
-
-            if (!ok && i == options_.send_retries) {
+            if (++i == connection_attempts_count)
+            {
+                current_endpoint_.reset();
                 throw;
             }
         }
@@ -940,8 +1048,26 @@ void Client::ResetConnection() {
     impl_->ResetConnection();
 }
 
+void Client::ResetConnectionEndpoint() {
+    impl_->ResetConnectionEndpoint();
+}
+
+const std::optional<Endpoint>& Client::GetCurrentEndpoint() const {
+    return impl_->GetCurrentEndpoint();
+}
+
 const ServerInfo& Client::GetServerInfo() const {
     return impl_->GetServerInfo();
+}
+
+Client::Version Client::GetVersion() {
+    return Version {
+        CLICKHOUSE_CPP_VERSION_MAJOR,
+        CLICKHOUSE_CPP_VERSION_MINOR,
+        CLICKHOUSE_CPP_VERSION_PATCH,
+        CLICKHOUSE_CPP_VERSION_BUILD,
+        ""
+    };
 }
 
 }

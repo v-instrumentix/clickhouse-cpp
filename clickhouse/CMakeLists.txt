@@ -5,6 +5,7 @@ SET ( clickhouse-cpp-lib-src
     base/platform.cpp
     base/socket.cpp
     base/wire_format.cpp
+    base/endpoints_iterator.cpp
 
     columns/array.cpp
     columns/column.cpp
@@ -16,7 +17,6 @@ SET ( clickhouse-cpp-lib-src
     columns/ip4.cpp
     columns/ip6.cpp
     columns/lowcardinality.cpp
-    columns/lowcardinalityadaptor.h
     columns/nullable.cpp
     columns/numeric.cpp
     columns/map.cpp
@@ -33,18 +33,88 @@ SET ( clickhouse-cpp-lib-src
     block.cpp
     client.cpp
     query.cpp
+
+    # Headers
+    base/buffer.h
+    base/compressed.h
+    base/endpoints_iterator.h
+    base/input.h
+    base/open_telemetry.h
+    base/output.h
+    base/platform.h
+    base/projected_iterator.h
+    base/singleton.h
+    base/socket.h
+    base/sslsocket.h
+    base/string_utils.h
+    base/string_view.h
+    base/uuid.h
+    base/wire_format.h
+
+    columns/array.h
+    columns/column.h
+    columns/date.h
+    columns/decimal.h
+    columns/enum.h
+    columns/factory.h
+    columns/geo.h
+    columns/ip4.h
+    columns/ip6.h
+    columns/itemview.h
+    columns/lowcardinality.h
+    columns/lowcardinalityadaptor.h
+    columns/map.h
+    columns/nothing.h
+    columns/nullable.h
+    columns/numeric.h
+    columns/string.h
+    columns/tuple.h
+    columns/utils.h
+    columns/uuid.h
+
+    types/type_parser.h
+    types/types.h
+
+    block.h
+    client.h
+    error_codes.h
+    exceptions.h
+    protocol.h
+    query.h
+    server_exception.h
 )
+
+if (MSVC)
+    add_definitions(-D_CRT_SECURE_NO_WARNINGS)
+    add_compile_options(/W4)
+    # remove in 3.0
+    add_compile_options(/wd4996)
+else()
+    set(cxx_extra_wall "-Wempty-body -Wconversion -Wreturn-type -Wparentheses -Wuninitialized -Wunreachable-code -Wunused-function -Wunused-value -Wunused-variable")   
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${cxx_extra_wall}")
+
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+        # a little abnormal when clang check conversion
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${cxx_extra_wall} -Wno-conversion")
+    endif()
+endif()
 
 IF (WITH_OPENSSL)
     LIST(APPEND clickhouse-cpp-lib-src base/sslsocket.cpp)
 ENDIF ()
 
-ADD_LIBRARY (clickhouse-cpp-lib ${clickhouse-cpp-lib-src})
-SET_TARGET_PROPERTIES (clickhouse-cpp-lib PROPERTIES LINKER_LANGUAGE CXX)
+ADD_LIBRARY (clickhouse-cpp-lib ${clickhouse-cpp-lib-src}
+    version.h)
+SET_TARGET_PROPERTIES (clickhouse-cpp-lib
+    PROPERTIES
+    LINKER_LANGUAGE CXX
+    VERSION ${CLICKHOUSE_CPP_VERSION}
+)
 TARGET_LINK_LIBRARIES (clickhouse-cpp-lib
     absl::int128
     cityhash::cityhash
     lz4::lz4
+    zstd::zstd
 )
 TARGET_INCLUDE_DIRECTORIES (clickhouse-cpp-lib
     PUBLIC ${PROJECT_SOURCE_DIR}
@@ -52,7 +122,13 @@ TARGET_INCLUDE_DIRECTORIES (clickhouse-cpp-lib
 
 IF (NOT BUILD_SHARED_LIBS)
     ADD_LIBRARY (clickhouse-cpp-lib-static ALIAS clickhouse-cpp-lib)
-ENDIF()
+ELSE ()
+    SET_TARGET_PROPERTIES (clickhouse-cpp-lib
+        PROPERTIES
+        SO_VERSION ${CLICKHOUSE_CPP_VERSION}
+        SO_VERSION ${CLICKHOUSE_CPP_VERSION_MAJOR}
+    )
+ENDIF ()
 
 
 IF (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
@@ -90,6 +166,7 @@ INSTALL(FILES exceptions.h DESTINATION include/clickhouse/)
 INSTALL(FILES server_exception.h DESTINATION include/clickhouse/)
 INSTALL(FILES protocol.h DESTINATION include/clickhouse/)
 INSTALL(FILES query.h DESTINATION include/clickhouse/)
+INSTALL(FILES version.h DESTINATION include/clickhouse/)
 
 # base
 INSTALL(FILES base/buffer.h DESTINATION include/clickhouse/base/)
@@ -105,6 +182,7 @@ INSTALL(FILES base/string_utils.h DESTINATION include/clickhouse/base/)
 INSTALL(FILES base/string_view.h DESTINATION include/clickhouse/base/)
 INSTALL(FILES base/uuid.h DESTINATION include/clickhouse/base/)
 INSTALL(FILES base/wire_format.h DESTINATION include/clickhouse/base/)
+INSTALL(FILES base/endpoints_iterator.h DESTINATION include/clickhouse/base/)
 
 # columns
 INSTALL(FILES columns/array.h DESTINATION include/clickhouse/columns/)

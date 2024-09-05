@@ -19,6 +19,8 @@ public:
      */
     explicit ColumnIPv4(ColumnRef data);
 
+    explicit ColumnIPv4(std::vector<uint32_t>&& data);
+
     /// Appends one element to the column.
     void Append(const std::string& ip);
 
@@ -37,6 +39,9 @@ public:
     std::string AsString(size_t n) const;
 
 public:
+    /// Increase the capacity of the column for large block insertion.
+    void Reserve(size_t new_cap) override;
+
     /// Appends content of given column to the end of current one.
     void Append(ColumnRef column) override;
 

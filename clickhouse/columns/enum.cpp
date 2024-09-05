@@ -21,6 +21,13 @@ ColumnEnum<T>::ColumnEnum(TypeRef type, const std::vector<T>& data)
 }
 
 template <typename T>
+ColumnEnum<T>::ColumnEnum(TypeRef type, std::vector<T>&& data)
+    : Column(type)
+    , data_(std::move(data))
+{
+}
+
+template <typename T>
 void ColumnEnum<T>::Append(const T& value, bool checkValue) {
     if  (checkValue) {
         // TODO: type_->HasEnumValue(value), "Enum type doesn't have value " + std::to_string(value);
@@ -30,7 +37,7 @@ void ColumnEnum<T>::Append(const T& value, bool checkValue) {
 
 template <typename T>
 void ColumnEnum<T>::Append(const std::string& name) {
-    data_.push_back(type_->As<EnumType>()->GetEnumValue(name));
+    data_.push_back(static_cast<T>(type_->As<EnumType>()->GetEnumValue(name)));
 }
 
 template <typename T>
@@ -49,11 +56,6 @@ std::string_view ColumnEnum<T>::NameAt(size_t n) const {
 }
 
 template <typename T>
-const T& ColumnEnum<T>::operator[] (size_t n) const {
-    return data_[n];
-}
-
-template <typename T>
 void ColumnEnum<T>::SetAt(size_t n, const T& value, bool checkValue) {
     if (checkValue) {
         // TODO: type_->HasEnumValue(value), "Enum type doesn't have value " + std::to_string(value);
@@ -63,7 +65,12 @@ void ColumnEnum<T>::SetAt(size_t n, const T& value, bool checkValue) {
 
 template <typename T>
 void ColumnEnum<T>::SetNameAt(size_t n, const std::string& name) {
-    data_.at(n) = type_->As<EnumType>()->GetEnumValue(name);
+    data_.at(n) = static_cast<T>(type_->As<EnumType>()->GetEnumValue(name));
+}
+
+template<typename T>
+void ColumnEnum<T>::Reserve(size_t new_cap) {
+    data_.reserve(new_cap);
 }
 
 template <typename T>

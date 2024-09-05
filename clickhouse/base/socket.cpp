@@ -129,10 +129,10 @@ void SetNonBlock(SOCKET fd, bool value) {
 
 void SetTimeout(SOCKET fd, const SocketTimeoutParams& timeout_params) {
 #if defined(_unix_)
-    timeval recv_timeout{ timeout_params.recv_timeout.count() / 1000, static_cast<int>(timeout_params.recv_timeout.count() % 1000 * 1000) };
+    timeval recv_timeout{ static_cast<time_t>(timeout_params.recv_timeout.count() / 1000), static_cast<suseconds_t>(timeout_params.recv_timeout.count() % 1000 * 1000) };
     auto recv_ret = setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &recv_timeout, sizeof(recv_timeout));
 
-    timeval send_timeout{ timeout_params.send_timeout.count() / 1000, static_cast<int>(timeout_params.send_timeout.count() % 1000 * 1000) };
+    timeval send_timeout{ static_cast<time_t>(timeout_params.send_timeout.count() / 1000), static_cast<suseconds_t>(timeout_params.send_timeout.count() % 1000 * 1000) };
     auto send_ret = setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &send_timeout, sizeof(send_timeout));
 
     if (recv_ret == -1 || send_ret == -1) {
@@ -217,7 +217,7 @@ SOCKET SocketConnect(const NetworkAddress& addr, const SocketTimeoutParams& time
                 fd.fd = *s;
                 fd.events = POLLOUT;
                 fd.revents = 0;
-                ssize_t rval = Poll(&fd, 1, timeout_params.connect_timeout.count());
+                ssize_t rval = Poll(&fd, 1, static_cast<int>(timeout_params.connect_timeout.count()));
 
                 if (rval == -1) {
                     throw std::system_error(getSocketErrorCode(), getErrorCategory(), "fail to connect");
@@ -390,9 +390,9 @@ std::unique_ptr<OutputStream> Socket::makeOutputStream() const {
 
 NonSecureSocketFactory::~NonSecureSocketFactory()  {}
 
-std::unique_ptr<SocketBase> NonSecureSocketFactory::connect(const ClientOptions &opts) {
-    const auto address = NetworkAddress(opts.host, std::to_string(opts.port));
+std::unique_ptr<SocketBase> NonSecureSocketFactory::connect(const ClientOptions &opts, const Endpoint& endpoint) {
 
+    const auto address = NetworkAddress(endpoint.host, std::to_string(endpoint.port));
     auto socket = doConnect(address, opts);
     setSocketOptions(*socket, opts);
 

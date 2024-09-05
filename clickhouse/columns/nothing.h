@@ -26,6 +26,9 @@ public:
     {
     }
 
+    /// Increase the capacity of the column for large block insertion.
+    void Reserve(size_t) override {};
+
     /// Appends one element to the column.
     void Append(std::unique_ptr<void*>) { ++size_; }
 
@@ -33,7 +36,7 @@ public:
     std::nullptr_t At(size_t) const { return nullptr; };
 
     /// Returns element at given row number.
-    std::nullptr_t operator [] (size_t) const { return nullptr; };
+    inline std::nullptr_t operator [] (size_t) const { return nullptr; };
 
     /// Makes slice of the current column.
     ColumnRef Slice(size_t, size_t len) const override {

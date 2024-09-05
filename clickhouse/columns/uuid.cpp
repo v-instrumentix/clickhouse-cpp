@@ -34,8 +34,8 @@ const UUID ColumnUUID::At(size_t n) const {
     return UUID(data_->At(n * 2), data_->At(n * 2 + 1));
 }
 
-const UUID ColumnUUID::operator [] (size_t n) const {
-    return UUID((*data_)[n * 2], (*data_)[n * 2 + 1]);
+void ColumnUUID::Reserve(size_t new_cap) {
+    data_->Reserve(new_cap);
 }
 
 void ColumnUUID::Append(ColumnRef column) {

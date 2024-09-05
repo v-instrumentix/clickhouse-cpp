@@ -15,6 +15,7 @@ SET ( clickhouse-cpp-ut-src
     performance_tests.cpp
     tcp_server.cpp
     readonly_client_test.cpp
+    abnormal_column_names_test.cpp
     connection_failed_client_test.cpp
     array_of_low_cardinality_tests.cpp
     CreateColumnByType_ut.cpp
@@ -42,4 +43,5 @@ TARGET_LINK_LIBRARIES (clickhouse-cpp-ut
 
 IF (MSVC)
     TARGET_COMPILE_OPTIONS(clickhouse-cpp-ut PRIVATE /bigobj)
+    TARGET_LINK_LIBRARIES (clickhouse-cpp-ut Crypt32)
 ENDIF()

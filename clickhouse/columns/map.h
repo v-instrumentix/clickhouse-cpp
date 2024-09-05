@@ -25,6 +25,9 @@ public:
      */
     explicit ColumnMap(ColumnRef data);
 
+    /// Increase the capacity of the column for large block insertion.
+    void Reserve(size_t new_cap) override;
+
     /// Appends content of given column to the end of current one.
     void Append(ColumnRef column) override;
 
@@ -212,7 +215,7 @@ public:
 
     inline auto At(size_t index) const { return MapValueView{typed_data_->At(index)}; }
 
-    inline auto operator[](size_t index) const { return MapValueView{typed_data_->At(index)}; }
+    inline auto operator[](size_t index) const { return At(index); }
 
     using ColumnMap::Append;
 

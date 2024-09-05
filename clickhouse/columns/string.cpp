@@ -30,6 +30,10 @@ ColumnFixedString::ColumnFixedString(size_t n)
 {
 }
 
+void ColumnFixedString::Reserve(size_t new_cap) {
+    data_.reserve(string_size_ * new_cap);
+}
+
 void ColumnFixedString::Append(std::string_view str) {
     if (str.size() > string_size_) {
         throw ValidationError("Expected string of length not greater than "
@@ -45,8 +49,10 @@ void ColumnFixedString::Append(std::string_view str) {
 
     data_.insert(data_.size(), str);
     // Pad up to string_size_ with zeroes.
-    const auto padding_size = string_size_ - str.size();
-    data_.resize(data_.size() + padding_size, char(0));
+    if (str.size() < string_size_) {
+        const auto padding_size = string_size_ - str.size();
+        data_.resize(data_.size() + padding_size, char(0));
+    }
 }
 
 void ColumnFixedString::Clear() {
@@ -56,11 +62,6 @@ void ColumnFixedString::Clear() {
 std::string_view ColumnFixedString::At(size_t n) const {
     const auto pos = n * string_size_;
     return std::string_view(&data_.at(pos), string_size_);
-}
-
-std::string_view ColumnFixedString::operator [](size_t n) const {
-    const auto pos = n * string_size_;
-    return std::string_view(&data_[pos], string_size_);
 }
 
 size_t ColumnFixedString::FixedSize() const {
@@ -165,8 +166,8 @@ ColumnString::ColumnString(size_t element_count)
     : Column(Type::CreateString())
 {
     items_.reserve(element_count);
-    // 100 is arbitrary number, assumption that string values are about ~40 bytes long.
-    blocks_.reserve(std::max<size_t>(1, element_count / 100));
+    // 16 is arbitrary number, assumption that string values are about ~256 bytes long.
+    blocks_.reserve(std::max<size_t>(1, element_count / 16));
 }
 
 ColumnString::ColumnString(const std::vector<std::string>& data)
@@ -178,7 +179,7 @@ ColumnString::ColumnString(const std::vector<std::string>& data)
     for (const auto & s : data) {
         AppendUnsafe(s);
     }
-};
+}
 
 ColumnString::ColumnString(std::vector<std::string>&& data)
     : ColumnString()
@@ -194,6 +195,12 @@ ColumnString::ColumnString(std::vector<std::string>&& data)
 
 ColumnString::~ColumnString()
 {}
+
+void ColumnString::Reserve(size_t new_cap) {
+    items_.reserve(new_cap);
+    // 16 is arbitrary number, assumption that string values are about ~256 bytes long.
+    blocks_.reserve(std::max<size_t>(1, new_cap / 16));
+}
 
 void ColumnString::Append(std::string_view str) {
     if (blocks_.size() == 0 || blocks_.back().GetAvailable() < str.length()) {
@@ -225,15 +232,10 @@ void ColumnString::Clear() {
     items_.clear();
     blocks_.clear();
     append_data_.clear();
-    append_data_.shrink_to_fit();
 }
 
 std::string_view ColumnString::At(size_t n) const {
     return items_.at(n);
-}
-
-std::string_view ColumnString::operator [] (size_t n) const {
-    return items_[n];
 }
 
 void ColumnString::Append(ColumnRef column) {
@@ -252,26 +254,37 @@ void ColumnString::Append(ColumnRef column) {
 }
 
 bool ColumnString::LoadBody(InputStream* input, size_t rows) {
-    items_.clear();
-    blocks_.clear();
+    if (rows == 0) {
+        items_.clear();
+        blocks_.clear();
 
-    items_.reserve(rows);
-    Block * block = nullptr;
+        return true;
+    }
 
-    // TODO(performance): unroll a loop to a first row (to get rid of `blocks_.size() == 0` check) and the rest.
+    decltype(items_) new_items;
+    decltype(blocks_) new_blocks;
+
+    new_items.reserve(rows);
+
+    // Suboptimzal if the first row string is >DEFAULT_BLOCK_SIZE, but that must be a very rare case.
+    Block * block = &new_blocks.emplace_back(DEFAULT_BLOCK_SIZE);
+
     for (size_t i = 0; i < rows; ++i) {
         uint64_t len;
         if (!WireFormat::ReadUInt64(*input, &len))
             return false;
 
-        if (blocks_.size() == 0 || len > block->GetAvailable())
-            block = &blocks_.emplace_back(std::max<size_t>(DEFAULT_BLOCK_SIZE, len));
+        if (len > block->GetAvailable())
+            block = &new_blocks.emplace_back(std::max<size_t>(DEFAULT_BLOCK_SIZE, len));
 
         if (!WireFormat::ReadBytes(*input, block->GetCurrentWritePos(), len))
             return false;
 
-        items_.emplace_back(block->ConsumeTailAsStringViewUnsafe(len));
+        new_items.emplace_back(block->ConsumeTailAsStringViewUnsafe(len));
     }
+
+    items_.swap(new_items);
+    blocks_.swap(new_blocks);
 
     return true;
 }

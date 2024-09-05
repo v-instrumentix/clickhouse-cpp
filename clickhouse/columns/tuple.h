@@ -17,15 +17,18 @@ public:
     /// Returns count of columns in the tuple.
     size_t TupleSize() const;
 
-    ColumnRef operator [] (size_t n) const {
+    inline ColumnRef operator [] (size_t n) const {
         return columns_[n];
     }
 
-    ColumnRef At(size_t n) const {
+    inline ColumnRef At(size_t n) const {
         return columns_[n];
     }
 
 public:
+    /// Increase the capacity of the column for large block insertion.
+    void Reserve(size_t new_cap) override;
+
     /// Appends content of given column to the end of current one.
     void Append(ColumnRef column) override;
 

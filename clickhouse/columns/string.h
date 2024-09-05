@@ -27,6 +27,9 @@ public:
             Append(v);
     }
 
+    /// Increase the capacity of the column for large block insertion.
+    void Reserve(size_t) override;
+
     /// Appends one element to the column.
     void Append(std::string_view str);
 
@@ -34,7 +37,7 @@ public:
     std::string_view At(size_t n) const;
 
     /// Returns element at given row number.
-    std::string_view operator [] (size_t n) const;
+    inline std::string_view operator [] (size_t n) const { return At(n); }
 
     /// Returns the max size of the fixed string
     size_t FixedSize() const;
@@ -84,6 +87,9 @@ public:
     ColumnString& operator=(const ColumnString&) = delete;
     ColumnString(const ColumnString&) = delete;
 
+    /// Increase the capacity of the column for large block insertion.
+    void Reserve(size_t new_cap) override;
+
     /// Appends one element to the column.
     void Append(std::string_view str);
 
@@ -101,7 +107,7 @@ public:
     std::string_view At(size_t n) const;
 
     /// Returns element at given row number.
-    std::string_view operator [] (size_t n) const;
+    inline std::string_view operator [] (size_t n) const { return At(n); }
 
 public:
     /// Appends content of given column to the end of current one.
